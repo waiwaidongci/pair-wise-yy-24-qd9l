@@ -10,26 +10,54 @@ button{cursor:pointer;background:#16324f;color:white}pre{white-space:pre-wrap;ma
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.grid input{width:90%}
 </style>
 <h1>电台播出与版权窗口排程</h1>
-<section><h2>当前计划</h2><button onclick="load()">刷新</button><pre id="state"></pre></section>
+<section><h2>当前版本与最近变更</h2>
+<button onclick="load()">刷新</button>
+<input id="vid" type="number" placeholder="版本 ID" style="width:90px"><button onclick="viewVersion()">查看版本详情</button>
+<pre id="versions"></pre></section>
+<section><h2>内部草案（发布前不影响正式排期，仅供内部查看）</h2>
+<div class="grid"><input id="dtitle" placeholder="草案名称"><input id="basevid" type="number" placeholder="基于历史版本 ID，可空"><input id="pubnote" placeholder="发布备注，可空"></div>
+<button onclick="newDraft('empty')">新建空草案</button><button onclick="newDraft('current')">从当前计划建草案</button><button onclick="newDraft('version')">从历史版本建草案</button>
+<div class="grid"><input id="did" type="number" placeholder="草案 ID"><input id="dairdate" value="2026-09-28"><input id="dstarttime" value="12:00">
+<input id="dpid" type="number" placeholder="节目 ID"><input id="dregion" value="华东"><input id="dsid" type="number" placeholder="草案排期 ID"></div>
+<button onclick="draftAdd()">加入草案排期</button><button onclick="draftDel()">删除草案排期</button>
+<button onclick="draftValidate()">校验草案</button><button onclick="draftPublish()">发布为新版本</button><button onclick="draftAbandon()">废弃草案</button>
+<pre id="drafts"></pre></section>
+<section><h2>当前已发布计划</h2><pre id="state"></pre></section>
 <section><h2>新建节目</h2><div class="grid">
 <input id="title" placeholder="节目名"><select id="kind"><option>music</option><option>ad</option><option>talk</option><option>live</option></select>
 <input id="duration" type="number" value="30" placeholder="分钟"><input id="start" value="2026-01-01"><input id="end" value="2026-12-31">
 <input id="region" value="华东"><input id="sponsor" placeholder="赞助商，可空"><input id="cooldown" type="number" value="0" placeholder="冷却分钟">
 </div><button onclick="addProgram()">创建并授权地区</button></section>
-<section><h2>排期 / 替换 / 实播对账</h2>
-<div class="grid"><input id="airdate" value="2026-09-28"><input id="starttime" value="12:00"><input id="pid" type="number" placeholder="节目 ID">
-<input id="sid" type="number" placeholder="排期 ID"><input id="newpid" type="number" placeholder="替换节目 ID"><input id="actualstart" value="12:00">
+<section><h2>实播与对账</h2>
+<div class="grid"><input id="recdate" value="2026-09-28"><input id="sid" type="number" placeholder="排期 ID"><input id="actualstart" value="12:00">
 <input id="actualduration" type="number" value="30" placeholder="实播分钟"><input id="actualpid" type="number" placeholder="实播节目 ID，可空"></div>
-<button onclick="schedule()">排期</button><button onclick="replace()">替换</button><button onclick="playout()">记录实播</button><button onclick="reconcile()">对账</button><pre id="result"></pre></section>
+<button onclick="playout()">记录实播</button><button onclick="reconcile()">对账</button></section>
+<section><h2>操作结果</h2><pre id="result"></pre></section>
 <script>
-const api=async(url,body)=>{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();out(j);return j};
+const api=async(url,body)=>{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();out(j);await load();return j};
 const out=x=>document.querySelector('#result').textContent=JSON.stringify(x,null,2);
-async function load(){document.querySelector('#state').textContent=JSON.stringify(await (await fetch('/api/state')).json(),null,2)}
+async function load(){
+  const s=await (await fetch('/api/state')).json();
+  document.querySelector('#state').textContent=JSON.stringify({programs:s.programs,slots:s.slots,exceptions:s.exceptions},null,2);
+  const cur=s.current_version?`当前版本：v${s.current_version.version_no}（${s.current_version.created_at}）`:'当前版本：尚未发布';
+  const lines=s.versions.map(v=>`v${v.version_no} · ${v.created_at} · 新增${v.added}/移除${v.removed} · 共${v.slot_count}条`
+    +(v.source_version_id?` · 基于历史版本v${v.source_version_id}`:'')
+    +(v.draft_title?` · 草案「${v.draft_title}」`:'')+(v.note?` · 备注：${v.note}`:''));
+  document.querySelector('#versions').textContent=[cur,...lines].join('\n');
+  const dlines=s.drafts.flatMap(d=>[`草案#${d.id}「${d.title}」`+(d.base_version_id?`（基于历史版本v${d.base_version_id}）`:'')+` · ${d.slots.length}条`,
+    ...d.slots.map(x=>`  草案排期#${x.id} ${x.air_date} ${x.start_time} ${x.title}(节目${x.program_id}) ${x.region}`)]);
+  document.querySelector('#drafts').textContent=dlines.length?dlines.join('\n'):'（暂无内部草案）';
+}
+async function viewVersion(){out(await (await fetch('/api/versions/'+vid.value)).json())}
+function newDraft(mode){const b={title:dtitle.value};if(mode==='current')b.copy_current=true;if(mode==='version')b.base_version_id=+basevid.value;api('/api/drafts',b)}
 function addProgram(){api('/api/programs',{title:title.value,kind:kind.value,duration_minutes:+duration.value,start_date:start.value,end_date:end.value,region:region.value,regions:[region.value],sponsor:sponsor.value||null,cooldown_minutes:+cooldown.value})}
-function schedule(){api('/api/schedule',{air_date:airdate.value,start_time:starttime.value,program_id:+pid.value,region:region.value})}
-function replace(){api('/api/slots/'+sid.value+'/replace',{new_program_id:+newpid.value})}
+function draftAdd(){api('/api/drafts/'+did.value+'/slots',{air_date:dairdate.value,start_time:dstarttime.value,program_id:+dpid.value,region:dregion.value})}
+function draftDel(){api('/api/drafts/'+did.value+'/slots/'+dsid.value+'/delete',{})}
+function draftValidate(){api('/api/drafts/'+did.value+'/validate',{})}
+function draftPublish(){api('/api/drafts/'+did.value+'/publish',{note:pubnote.value})}
+function draftAbandon(){api('/api/drafts/'+did.value+'/abandon',{})}
 function playout(){api('/api/playout',{slot_id:+sid.value,actual_start:actualstart.value,actual_duration_minutes:+actualduration.value,actual_program_id:actualpid.value?+actualpid.value:null})}
-function reconcile(){api('/api/reconcile',{date:airdate.value})}
+function reconcile(){api('/api/reconcile',{date:recdate.value})}
 load();
 </script>
 </html>
