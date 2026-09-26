@@ -2,6 +2,8 @@
 
 一个不依赖第三方包、使用 SQLite 和标准库 HTTP 服务的电台排程项目。系统把“计划排期”和“实际播出”分开保存，支持地区授权、日期窗口、禁播时段、节目冷却、赞助商间隔、直播临时替换、实播对账与版权越界检查。
 
+排期调整不再立即生效：所有改动先进入**编排草案**（仅内部可见），整体校验通过后**发布**为不可修改的新版本。出问题时可以从任意历史版本重新建草案回滚，已发布版本和已登记的实播记录永远保留，对账始终能追溯当时的播出依据。
+
 ## 运行
 
 需要 Python 3.11+。
@@ -26,12 +28,25 @@ python -m unittest discover -s tests -v
 
 ## 主要 API
 
-- `GET /api/state`：节目、排期和最近对账异常
+- `GET /api/state`：节目、当前发布版本及排期、当前草案及草案排期、最近 5 个版本、最近对账异常
+- `POST /api/drafts`：新建草案，`source_version_id` 留空表示基于当前版本，传历史版本 ID 即回滚重建
+- `POST /api/drafts/publish`：整体校验草案并发布为新版本（版本号递增，发布后不可修改）
+- `POST /api/drafts/discard`：废弃当前草案
+- `GET /api/versions/{id}`：查看某个版本的完整排期
 - `POST /api/programs`：创建节目并授权地区
 - `POST /api/programs/{id}/regions`：追加地区授权
-- `POST /api/schedule`：创建排期
-- `POST /api/slots/{id}/replace`：替换计划节目并重新校验
-- `POST /api/playout`：登记实播记录
+- `POST /api/schedule`：在草案中创建排期
+- `POST /api/slots/{id}/replace`：在草案中替换计划节目并重新校验
+- `POST /api/slots/{id}/cancel`：在草案中取消排期
+- `POST /api/playout`：登记实播记录（只能登记到已发布版本的排期）
 - `POST /api/reconcile`：按日期生成漏播、错播、时长偏差和超授权异常
+
+## 草案与版本流程
+
+1. `POST /api/drafts` 新建草案（全台同一时间只有一个草案，避免多人互相覆盖）。
+2. 在草案里排期、替换、取消；这些改动只出现在 `draft_slots` 中，已发布计划不受影响。
+3. `POST /api/drafts/publish` 对草案内全部排期重新校验（重叠、授权、禁播、冷却、赞助商间隔），通过后发布为新版本，并记录“新增 · 调整 · 取消”的变更摘要。
+4. 已发布版本不可再改；需要调整时新建草案继续编辑。需要回滚时用历史版本的 ID 建草案，原版本和其下的实播记录都保留。
+5. 对账以实播记录登记时所在的版本排期为依据，回滚不会抹掉历史对账口径；当前版本中没有实播记录（含其历史来源）的排期会报漏播。
 
 准备排期时填写 `air_date`、`start_time`、`program_id`、`region`。页面会直接显示校验错误，不会保存失败的排期。

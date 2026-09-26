@@ -42,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         try:
+            parts = [p for p in parsed.path.split("/") if p]
             if parsed.path in ("/", "/index.html"):
                 data = (BASE / "static" / "index.html").read_bytes()
                 self.send_response(200)
@@ -57,8 +58,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not date:
                     raise DomainError("缺少 date 参数")
                 return self._json(200, {"exceptions": self.db.get_exceptions(date)})
+            if len(parts) == 3 and parts[:2] == ["api", "versions"]:
+                return self._json(200, self.db.get_version(int(parts[2])))
             self._json(404, {"ok": False, "error": "接口不存在"})
-        except DomainError as exc:
+        except (DomainError, ValueError) as exc:
             self._json(400, {"ok": False, "error": str(exc)})
 
     def do_POST(self):
@@ -74,6 +77,17 @@ class Handler(BaseHTTPRequestHandler):
                     body.get("regions") or [],
                 )
                 return self._json(201, {"ok": True, "id": program_id})
+            if parsed.path == "/api/drafts":
+                source = body.get("source_version_id")
+                draft_id = self.db.create_draft(
+                    int(source) if source else None, str(body.get("note", "")),
+                )
+                return self._json(201, {"ok": True, "id": draft_id})
+            if parsed.path == "/api/drafts/publish":
+                return self._json(200, {"ok": True, "version": self.db.publish_draft()})
+            if parsed.path == "/api/drafts/discard":
+                self.db.discard_draft()
+                return self._json(200, {"ok": True})
             if parsed.path == "/api/schedule":
                 slot_id = self.db.schedule_slot(
                     str(body.get("air_date", "")), str(body.get("start_time", "")),
@@ -92,6 +106,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, "exceptions": self.db.reconcile_date(str(body.get("date", "")))})
             if len(parts) == 4 and parts[:2] == ["api", "slots"] and parts[3] == "replace":
                 return self._json(200, {"ok": True, "slot": self.db.replace_slot(int(parts[2]), int(body.get("new_program_id", 0)))})
+            if len(parts) == 4 and parts[:2] == ["api", "slots"] and parts[3] == "cancel":
+                return self._json(200, {"ok": True, "slot": self.db.cancel_slot(int(parts[2]))})
             if len(parts) == 4 and parts[:2] == ["api", "programs"] and parts[3] == "regions":
                 self.db.authorize_region(int(parts[2]), str(body.get("region", "")))
                 return self._json(201, {"ok": True})
